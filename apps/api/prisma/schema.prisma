@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AspectRatio {
+  RATIO_16_9
+  RATIO_9_16
+  RATIO_4_3
+  RATIO_1_1
+}
+
+model User {
+  id          String    @id @default(uuid()) @db.Uuid
+  username    String    @db.VarChar(50)
+  handle      String    @unique @db.VarChar(30)
+  email       String    @unique
+  avatarUrl   String    @default("")
+  description String    @default("")
+  createdAt   DateTime  @default(now())
+  videos      Video[]
+  comments    Comment[]
+}
+
+model Video {
+  id           String       @id @default(uuid()) @db.Uuid
+  title        String       @db.VarChar(120)
+  slug         String       @unique
+  description  String       @default("") @db.VarChar(5000)
+  thumbnailUrl String
+  aspectRatio  AspectRatio  @default(RATIO_16_9)
+  category     String       @default("Other")
+  tags         String[]     @default([])
+  views        Int          @default(0)
+  likes        Int          @default(0)
+  creatorId    String       @db.Uuid
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  // GENERATED ALWAYS AS (weighted to_tsvector(title, tags, description)) STORED.
+  // The column itself is created by hand in the migration SQL (Prisma cannot express generated
+  // columns); dbgenerated() below mirrors Postgres's normalised expression so `migrate dev` sees no drift.
+  searchVector Unsupported("tsvector")? @default(dbgenerated("((setweight(to_tsvector('english'::regconfig, (COALESCE(title, ''::character varying))::text), 'A'::\"char\") || setweight(to_tsvector('english'::regconfig, COALESCE(immutable_array_to_string(tags, ' '::text), ''::text)), 'B'::\"char\")) || setweight(to_tsvector('english'::regconfig, (COALESCE(description, ''::character varying))::text), 'C'::\"char\"))"))
+
+  creator       User           @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  streamSources StreamSource[]
+  comments      Comment[]
+
+  // Home feed, keyset pagination: ORDER BY createdAt DESC, id DESC
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  // Category pills
+  @@index([category, createdAt(sort: Desc), id(sort: Desc)])
+  // Channel pages
+  @@index([creatorId, createdAt(sort: Desc)])
+  // Related videos: tags && ARRAY[...]
+  @@index([tags], type: Gin)
+  // Full-text search
+  @@index([searchVector], type: Gin)
+}
+
+model StreamSource {
+  id       String @id @default(uuid()) @db.Uuid
+  quality  String @db.VarChar(16) // "1080p" | "720p" | "480p" | "Auto"
+  embedUrl String
+  videoId  String @db.Uuid
+  video    Video  @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, quality])
+}
+
+model Comment {
+  id        String    @id @default(uuid()) @db.Uuid
+  content   String    @db.VarChar(2000)
+  videoId   String    @db.Uuid
+  authorId  String    @db.Uuid
+  parentId  String?   @db.Uuid
+  createdAt DateTime  @default(now())
+  video     Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parent    Comment?  @relation("Replies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   Comment[] @relation("Replies")
+
+  @@index([videoId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([parentId])
+  @@index([authorId])
+}
